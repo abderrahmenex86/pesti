@@ -1,0 +1,5 @@
+ip102_v1.1/
+__pycache__/
+venv/
+best_pest_model.pth
+training_history.json
