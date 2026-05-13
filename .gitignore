@@ -9,6 +9,8 @@ papers/
 *.json
 setup.py
 setup.sh
+*.pt
+*.txt
 
 node_modules/
 
