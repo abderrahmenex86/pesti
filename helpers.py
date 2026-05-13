@@ -1,182 +1,154 @@
 import torch
+from torchmetrics.classification import MulticlassAccuracy, MulticlassF1Score
 from tqdm.auto import tqdm
 
 
-def train(
-    model, train_loader, val_loader, criterion, optimizer, device, num_epochs
-):
-    best_val_loss = float("inf")
-    history = {
-        "train": {
-            "loss": [],
-            "loss_order": [],
-            "loss_family": [],
-            "loss_species": [],
-            "acc_order": [],
-            "acc_family": [],
-            "acc_species": [],
-        },
-        "val": {
-            "loss": [],
-            "loss_order": [],
-            "loss_family": [],
-            "loss_species": [],
-            "acc_order": [],
-            "acc_family": [],
-            "acc_species": [],
-        },
+def train_epoch(model, loader, criterion, optimizer, device, acc, top5_acc, f1):
+
+    model.train()
+
+    acc.reset()
+    top5_acc.reset()
+    f1.reset()
+
+    total_loss = 0.0
+    total_samples = 0
+
+    for inputs, outputs in tqdm(loader, desc="Training", leave=False, unit="batch"):
+        inputs, outputs = inputs.to(device), outputs.to(device)
+
+        optimizer.zero_grad()
+
+        predictions = model(inputs)
+
+        loss = criterion(predictions, outputs)
+
+        loss.backward()
+
+        optimizer.step()
+
+        batch_size = inputs.size(0)
+        total_samples += batch_size
+        total_loss += loss.item() * batch_size
+
+        acc.update(predictions, outputs)
+        top5_acc.update(predictions, outputs)
+        f1.update(predictions, outputs)
+
+    epoch_acc = acc.compute().item()
+    epoch_top5_acc = top5_acc.compute().item()
+    epoch_f1 = f1.compute().item()
+
+    return {
+        "loss": total_loss / total_samples,
+        "acc": epoch_acc * 100,
+        "top5_acc": epoch_top5_acc * 100,
+        "f1": epoch_f1 * 100,
     }
 
-    progress_bar = tqdm(range(1, num_epochs + 1), unit="epoch", leave=True)
 
-    for _ in progress_bar:
-        train_metrics = train_epoch(
-            model, train_loader, criterion, optimizer, device
-        )
-        val_metrics = evaluate(model, val_loader, criterion, device)
+def evaluate(model, loader, criterion, device, acc, top5_acc, f1):
+
+    model.eval()
+
+    acc.reset()
+    top5_acc.reset()
+    f1.reset()
+
+    total_loss = 0.0
+    total_samples = 0
+
+    with torch.no_grad():
+        for inputs, outputs in tqdm(loader, desc="Evaluating", leave=False, unit="batch"):
+            inputs, outputs = inputs.to(device), outputs.to(device)
+
+            predictions = model(inputs)
+
+            loss = criterion(predictions, outputs)
+
+            batch_size = inputs.size(0)
+            total_samples += batch_size
+            total_loss += loss.item() * batch_size
+
+            acc.update(predictions, outputs)
+            top5_acc.update(predictions, outputs)
+            f1.update(predictions, outputs)
+
+    epoch_acc = acc.compute().item()
+    epoch_top5_acc = top5_acc.compute().item()
+    epoch_f1 = f1.compute().item()
+
+    return {
+        "loss": total_loss / total_samples,
+        "acc": epoch_acc * 100,
+        "top5_acc": epoch_top5_acc * 100,
+        "f1": epoch_f1 * 100,
+    }
+
+
+def train(model, train_loader, val_loader, criterion, optimizer, scheduler, device, n_epochs):
+    best_val_f1 = 0.0
+    min_delta = 1e-4
+    history = {
+        "train": {"loss": [], "acc": [], "top5_acc": [], "f1": []},
+        "val": {"loss": [], "acc": [], "top5_acc": [], "f1": []},
+    }
+
+    acc = MulticlassAccuracy(num_classes=102).to(device)
+    top5_acc = MulticlassAccuracy(num_classes=102, top_k=5).to(device)
+    f1 = MulticlassF1Score(num_classes=102, average="macro").to(device)
+
+    for epoch in tqdm(range(1, n_epochs + 1), unit="epoch", leave=True):
+
+        train_metrics = train_epoch(model, train_loader, criterion, optimizer, device, acc, top5_acc, f1)
+        val_metrics = evaluate(model, val_loader, criterion, device, acc, top5_acc, f1)
+
+        scheduler.step()
+
+        current_lr = optimizer.param_groups[0]["lr"]
+        tqdm.write(f"Current LR: {current_lr:.6f}")
+
         for k, v in train_metrics.items():
             history["train"][k].append(v)
         for k, v in val_metrics.items():
             history["val"][k].append(v)
 
         tqdm.write(f"Train Loss: {train_metrics['loss']:.4f}")
+        tqdm.write(f"Train Accuracy -> {train_metrics['acc']:.2f}%")
+        tqdm.write(f"Train Top 5 Accuracy -> {train_metrics['top5_acc']:.2f}%")
+        tqdm.write(f"Train F1 -> {train_metrics['f1']:.2f}%")
+
         tqdm.write(f"Val Loss:   {val_metrics['loss']:.4f}")
-        tqdm.write(
-            f"Val Acc -> Order: {val_metrics['acc_order']:.2f}% | Family: {val_metrics['acc_family']:.2f}% | Species: {val_metrics['acc_species']:.2f}%"
-        )
+        tqdm.write(f"Val Accuracy -> {val_metrics['acc']:.2f}%")
+        tqdm.write(f"Val Top 5 Accuracy -> {val_metrics['top5_acc']:.2f}%")
+        tqdm.write(f"Val F1 -> {val_metrics['f1']:.2f}%")
 
-        if val_metrics["loss"] < best_val_loss:
-            best_val_loss = val_metrics["loss"]
-            torch.save(model.state_dict(), "best_pest_model.pth")
-            tqdm.write("Model is saved.")
+        current_val_f1 = val_metrics["f1"]
+
+        if current_val_f1 > best_val_f1 + min_delta:
+
+            best_val_f1 = current_val_f1
+
+            torch.save(model.state_dict(), "pest_model.pth")
+            torch.save(
+                {
+                    "model": model.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "scheduler": scheduler.state_dict(),
+                    "epoch": epoch,
+                },
+                "checkpoint.pth",
+            )
+            tqdm.write("Checkpoint saved.")
+        torch.save(
+            {
+                "model": model.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "scheduler": scheduler.state_dict(),
+                "epoch": epoch,
+            },
+            "last_checkpoint.pth",
+        )
+        tqdm.write("Last Checkpoint saved.")
+
     return history
-
-
-def train_epoch(model, loader, criterion, optimizer, device):
-    model.train()
-    metrics = {
-        k: 0.0
-        for k in [
-            "loss",
-            "loss_order",
-            "loss_family",
-            "loss_species",
-            "acc_order",
-            "acc_family",
-            "acc_species",
-        ]
-    }
-    total_samples = 0
-
-    progress_bar = tqdm(loader, desc="Training", leave=False, unit="batch")
-
-    for data, targets in progress_bar:
-        data = data.to(device)
-        targets = {k: v.to(device) for k, v in targets.items()}
-
-        optimizer.zero_grad()
-        predictions = model(data)
-
-        loss_order = criterion(predictions["order"], targets["order"])
-        loss_family = criterion(predictions["family"], targets["family"])
-        loss_species = criterion(predictions["species"], targets["species"])
-        total_loss = 0.1 * loss_order + 0.3 * loss_family + loss_species
-
-        total_loss.backward()
-        optimizer.step()
-
-        bs = data.size(0)
-        total_samples += bs
-        metrics["loss"] += total_loss.item() * bs
-        metrics["loss_order"] += loss_order.item() * bs
-        metrics["loss_family"] += loss_family.item() * bs
-        metrics["loss_species"] += loss_species.item() * bs
-
-        metrics["acc_order"] += (
-            (torch.argmax(predictions["order"], dim=1) == targets["order"])
-            .sum()
-            .item()
-        )
-        metrics["acc_family"] += (
-            (torch.argmax(predictions["family"], dim=1) == targets["family"])
-            .sum()
-            .item()
-        )
-        metrics["acc_species"] += (
-            (torch.argmax(predictions["species"], dim=1) == targets["species"])
-            .sum()
-            .item()
-        )
-
-        progress_bar.set_postfix({"loss": f"{total_loss.item():.3f}"})
-
-    # return running_loss / len(loader)
-    return {
-        k: (v / total_samples if "acc" not in k else (v / total_samples) * 100)
-        for k, v in metrics.items()
-    }
-
-
-def evaluate(model, loader, criterion, device):
-    model.eval()
-    metrics = {
-        k: 0.0
-        for k in [
-            "loss",
-            "loss_order",
-            "loss_family",
-            "loss_species",
-            "acc_order",
-            "acc_family",
-            "acc_species",
-        ]
-    }
-    total_samples = 0
-
-    progress_bar = tqdm(loader, desc="Evaluating", leave=False, unit="batch")
-
-    with torch.no_grad():
-        for data, targets in progress_bar:
-            data = data.to(device)
-            targets = {k: v.to(device) for k, v in targets.items()}
-            predictions = model(data)
-
-            loss_order = criterion(predictions["order"], targets["order"])
-            loss_family = criterion(predictions["family"], targets["family"])
-            loss_species = criterion(predictions["species"], targets["species"])
-            total_loss = 0.1 * loss_order + 0.3 * loss_family + loss_species
-
-            bs = data.size(0)
-            total_samples += bs
-            metrics["loss"] += total_loss.item() * bs
-            metrics["loss_order"] += loss_order.item() * bs
-            metrics["loss_family"] += loss_family.item() * bs
-            metrics["loss_species"] += loss_species.item() * bs
-            metrics["acc_order"] += (
-                (torch.argmax(predictions["order"], dim=1) == targets["order"])
-                .sum()
-                .item()
-            )
-            metrics["acc_family"] += (
-                (
-                    torch.argmax(predictions["family"], dim=1)
-                    == targets["family"]
-                )
-                .sum()
-                .item()
-            )
-            metrics["acc_species"] += (
-                (
-                    torch.argmax(predictions["species"], dim=1)
-                    == targets["species"]
-                )
-                .sum()
-                .item()
-            )
-
-            progress_bar.set_postfix({"val_loss": f"{total_loss.item():.3f}"})
-
-    return {
-        k: (v / total_samples if "acc" not in k else (v / total_samples) * 100)
-        for k, v in metrics.items()
-    }
