@@ -1,31 +1,17 @@
 import torch.nn as nn
-import torchvision.models as models
+from torchvision.models import MobileNet_V3_Large_Weights, mobilenet_v3_large
 
 
-class HierarchicalPestClassifier(nn.Module):
-    def __init__(self, num_orders, num_families, num_species=102):
+class PestClassifier(nn.Module):
+    def __init__(self, num_species=102):
         super().__init__()
 
-        base_model = models.mobilenet_v3_small(
-            weights=models.MobileNet_V3_Small_Weights.DEFAULT
-        )
-        self.backbone = base_model.features
-        self.pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.flatten = nn.Flatten()
-        self.dropout = nn.Dropout(p=0.2)
+        self.model = mobilenet_v3_large(weights=MobileNet_V3_Large_Weights.DEFAULT)
 
-        self.order_head = nn.Linear(576, num_orders)
-        self.family_head = nn.Linear(576, num_families)
-        self.species_head = nn.Linear(576, num_species)
+        in_features = self.model.classifier[3].in_features
+
+        self.model.classifier[3] = nn.Linear(in_features, num_species)
 
     def forward(self, x):
-        features = self.backbone(x)
-        features = self.dropout(features)
-        features = self.pool(features)
-        features = self.flatten(features)
-
-        return {
-            "order": self.order_head(features),
-            "family": self.family_head(features),
-            "species": self.species_head(features),
-        }
+        x = self.model(x)
+        return x
