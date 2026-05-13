@@ -1,23 +1,22 @@
-ip102_v1.1/
-__pycache__/
-venv/
-best_pest_model.pth
-training_history.json
 .vscode/
 .idea/
+venv/
+__pycache__/
+ip102_v1.1/
+vast/
+papers/
+*.pth
+*.json
+setup.py
+setup.sh
 
-# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
-
-# dependencies
 node_modules/
 
-# Expo
 .expo/
 dist/
 web-build/
 expo-env.d.ts
 
-# Native
 .kotlin/
 *.orig.*
 *.jks
@@ -26,26 +25,20 @@ expo-env.d.ts
 *.key
 *.mobileprovision
 
-# Metro
 .metro-health-check*
 
-# debug
 npm-debug.*
 yarn-debug.*
 yarn-error.*
 
-# macOS
 .DS_Store
 *.pem
 
-# local env files
 .env*.local
 
-# typescript
 *.tsbuildinfo
 
 app-example
 
-# generated native folders
 /ios
 /android
